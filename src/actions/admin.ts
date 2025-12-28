@@ -1,7 +1,7 @@
 "use server";
 
 import { adminDb } from "@/libs/firebaseAdmin";
-import { Medicine, Patient } from "@/types";
+import { Medicine, Patient, Intake } from "@/types";
 import { revalidatePath } from "next/cache";
 import { FieldValue } from "firebase-admin/firestore";
 
@@ -16,12 +16,16 @@ const serialize = (data: unknown) => {
 export async function getAllPatients(): Promise<Patient[]> {
   try {
     const snapshot = await adminDb.collection(USERS_COLLECTION).get();
+    console.log(`[Admin] Fetched ${snapshot.size} users from ${USERS_COLLECTION}`);
+    
     const patients: Patient[] = snapshot.docs.map(doc => {
       const data = doc.data();
+      const name = `${data.firstName || ""} ${data.lastName || ""}`.trim();
+      
       return {
         id: doc.id,
         email: data.email || "",
-        displayName: data.displayName || "İsimsiz Hasta",
+        displayName: name || data.displayName || "İsimsiz Hasta",
         phoneNumber: data.phoneNumber,
         age: data.age,
         // Convert Timestamp to ISO string if needed
@@ -53,6 +57,49 @@ export async function getPatientMedicines(userId: string): Promise<Medicine[]> {
   } catch (error) {
     console.error("Server Action Error (getPatientMedicines):", error);
     throw new Error("İlaçlar getirilemedi.");
+  }
+}
+
+export async function getPatientIntakes(userId: string): Promise<Intake[]> {
+  try {
+    const snapshot = await adminDb
+      .collection(USERS_COLLECTION)
+      .doc(userId)
+      .collection("intakes")
+      .orderBy("__name__", "desc") // Order by ID since it contains date, most recent first
+      .limit(50)
+      .get();
+
+    const intakes = snapshot.docs.map(doc => {
+      // Parse ID format: medicineId_YYYY-MM-DD_HH:mm
+      // Example: UmHoRqYDPQekYEJhdoX3_2025-12-28_05:40
+      const parts = doc.id.split('_');
+      // If valid format
+      if (parts.length >= 3) {
+        const medicineId = parts[0];
+        const dateStr = parts[1];
+        const timeStr = parts.slice(2).join(':'); // Handle case where time might be split incorrectly if it hadn't used simple split
+        return {
+          id: doc.id,
+          medicineId: medicineId,
+          timestamp: `${dateStr}T${timeStr}:00`,
+          takenAt: `${dateStr} ${timeStr}`,
+          status: "taken"
+        } as Intake;
+      }
+      
+      // Fallback for other formats
+      return {
+        id: doc.id,
+        takenAt: "Bilinmeyen Tarih",
+        status: "taken"
+      } as Intake;
+    });
+
+    return serialize(intakes);
+  } catch (error) {
+    console.error("Server Action Error (getPatientIntakes):", error);
+    return []; // Return empty array instead of throwing to avoid breaking the page
   }
 }
 
